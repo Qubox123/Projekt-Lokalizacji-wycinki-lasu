@@ -4,7 +4,7 @@
 # - SF7 / 125 kHz, 4-byte payload -> ~30 ms on air, sent exactly once, no retries
 # - radio put to sleep right after
 #
-# Run without saving to flash:  ampy -p /dev/ttyACM1 run lora_tx_once.py
+# Run from repo root:  python3 esp32/tools/rawrun.py /dev/ttyACM1 esp32/tests/lora_tx_once.py
 
 import time
 import socket

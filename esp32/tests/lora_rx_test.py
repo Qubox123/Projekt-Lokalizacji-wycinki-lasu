@@ -5,7 +5,8 @@
 # - estimates the channel noise floor with ischannel_free()
 # - listens for any LoRa packets on 868.1 MHz for LISTEN_S seconds
 #
-# Run without saving to flash:  ampy -p /dev/ttyACM1 run lora_rx_test.py
+# Run from repo root:  ampy -p /dev/ttyACM1 run esp32/tests/lora_rx_test.py  (LISTEN_S must stay < ~10 s for ampy)
+#   or:               python3 esp32/tools/rawrun.py /dev/ttyACM1 esp32/tests/lora_rx_test.py
 
 import time
 import socket

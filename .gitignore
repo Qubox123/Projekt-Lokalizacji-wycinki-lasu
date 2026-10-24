@@ -1,1 +1,2 @@
 *.bin
+esp32/device/config.py

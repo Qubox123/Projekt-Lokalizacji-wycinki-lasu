@@ -7,6 +7,7 @@ Przykłady:
 """
 
 import argparse
+import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import numpy as np
 import config as C
 import datasets as D
 import export as E
+import plots
 from model import build_model
 
 
@@ -95,7 +97,7 @@ def main():
                   metrics=["binary_accuracy", keras.metrics.AUC(name="auc"),
                            keras.metrics.Precision(name="precision"),
                            keras.metrics.Recall(name="recall")])
-    model.fit(TrainSequence(train_synth, args.batch, args.steps),
+    hist = model.fit(TrainSequence(train_synth, args.batch, args.steps),
               validation_data=(Xv, yv), epochs=args.epochs,
               callbacks=[
                   keras.callbacks.EarlyStopping("val_auc", mode="max", patience=8,
@@ -104,15 +106,23 @@ def main():
               ])
     model.save(out / "chainsaw.keras")
 
-    report("test float32", model.predict(Xt, verbose=0)[:, 0], yt, mt, C.DETECT_THRESHOLD)
+    p_float = model.predict(Xt, verbose=0)[:, 0]
+    report("test float32", p_float, yt, mt, C.DETECT_THRESHOLD)
 
     tflite = E.to_tflite_int8(model, Xn[:500])
     (out / "chainsaw_int8.tflite").write_bytes(tflite)
     clf = E.TFLiteClassifier(tflite)
-    report("test int8 (jak na ESP32)", clf(Xt), yt, mt, C.DETECT_THRESHOLD)
+    p_int8 = clf(Xt)
+    report("test int8 (jak na ESP32)", p_int8, yt, mt, C.DETECT_THRESHOLD)
 
     E.write_model_header(tflite, out / "chainsaw_model_data.h")
     E.write_feature_header(out / "feature_config.h", clf)
+    (out / "history.json").write_text(json.dumps(
+        {k: [float(v) for v in vals] for k, vals in hist.history.items()}, indent=1))
+    np.savez(out / "eval.npz", y=yt, p_float=p_float, p_int8=p_int8,
+             meta=np.array(mt, dtype=object))
+    plots.save_all(out)
+
     print(f"\nModel int8: {len(tflite) / 1024:.1f} KB, parametry: {model.count_params()}")
     print(f"Zapisano do {out}/: chainsaw.keras, chainsaw_int8.tflite, "
           "chainsaw_model_data.h, feature_config.h")

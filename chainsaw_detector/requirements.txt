@@ -2,3 +2,4 @@ tensorflow>=2.16
 numpy
 scipy
 soundfile
+matplotlib

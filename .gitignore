@@ -1,0 +1,12 @@
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# PlatformIO
+.pio/
+
+# System / IDE
+.DS_Store
+.vscode/

@@ -16,7 +16,7 @@ N_FRAMES = 1 + (WINDOW_SAMPLES - N_FFT) // HOP   # 49 ramek
 N_MELS = 40
 FMIN = 100.0
 FMAX = 8000.0
-LOG_EPS = 1e-6
+LOG_EPS = 1e-10            # 1e-6 wymazywało ciche nagrania (85% pasm piły z Kenii było poniżej)
 
 # Filtr górnoprzepustowy: wycina dudnienie wiatru i niskie pasmo szumu drzew.
 # Piła ma ton podstawowy ~90–250 Hz i silne harmoniczne do kilku kHz, więc 150 Hz

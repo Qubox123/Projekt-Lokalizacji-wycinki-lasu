@@ -3,6 +3,7 @@
 Obsługiwane źródła:
   * ESC-50  (https://github.com/karolpiczak/ESC-50)  - klasa "chainsaw" + 49 innych
   * FSC22   (Forest Sound Classification, Kaggle)    - klasa "Chainsaw" + dźwięki lasu
+  * manifest - unified_dataset/manifest_eligible.csv (Kenya, FrugalAI, Zenodo)
   * folder  - własne nagrania: <root>/chainsaw/*.wav oraz <root>/<dowolna_klasa>/*.wav
   * synthetic - sztuczne dźwięki do szybkiego sprawdzenia, że potok działa
 
@@ -98,6 +99,48 @@ def load_folder(root, positive=("chainsaw",)):
     return clips
 
 
+def load_manifest(manifest, cache_dir=None, min_sec=0.5):
+    """unified_dataset/manifest_eligible.csv: jawne label, group_id, ścieżki względne.
+
+    Cały zbiór to ok. 43 h (ok. 5 GB int16 po 16 kHz), więc audio trafia do jednego
+    pliku .npy otwieranego jako memmap - czytane są tylko potrzebne wycinki.
+    """
+    manifest = Path(manifest)
+    root = manifest.parent
+    with open(manifest, encoding="utf-8-sig", newline="") as f:
+        rows = [r for r in csv.DictReader(f)
+                if r.get("eligible_for_training", "1") == "1"
+                and float(r["duration_seconds"]) >= min_sec]
+
+    cache_dir = Path(cache_dir or root)
+    audio_path, meta_path = cache_dir / "manifest_audio.npy", cache_dir / "manifest_meta.pkl"
+    if not (audio_path.exists() and meta_path.exists()):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        est = sum(math.ceil(int(r["n_frames"]) * C.SAMPLE_RATE / int(r["sample_rate"])) + 16
+                  for r in rows)
+        buf = np.lib.format.open_memmap(audio_path, mode="w+", dtype=np.int16, shape=(est,))
+        meta, pos = [], 0
+        for i, r in enumerate(rows):
+            x = to_int16(load_audio(root / r["path"]))
+            buf[pos:pos + len(x)] = x
+            meta.append((pos, len(x), int(r["label"]),
+                         f"{r['dataset']}:{_norm(r['original_label'] or r['category'])}",
+                         r["group_id"], r["dataset"]))
+            pos += len(x)
+            if (i + 1) % 2000 == 0:
+                print(f"  wczytano {i + 1}/{len(rows)} plików")
+        buf.flush()
+        del buf
+        with open(meta_path, "wb") as f:
+            pickle.dump(meta, f)
+
+    audio = np.load(audio_path, mmap_mode="r")
+    with open(meta_path, "rb") as f:
+        meta = pickle.load(f)
+    return [Clip(audio[o:o + n], label, cat, group, src)
+            for o, n, label, cat, group, src in meta]
+
+
 def make_synthetic(n_per_class=40, dur=5.0, seed=0):
     """Sztuczne dźwięki - tylko do testu potoku, nie do prawdziwego modelu."""
     rng = np.random.default_rng(seed)
@@ -150,34 +193,80 @@ def make_synthetic(n_per_class=40, dur=5.0, seed=0):
     return clips
 
 
-def load_all(esc50=None, fsc22=None, folders=(), synthetic=False, cache=None):
+def load_all(esc50=None, fsc22=None, folders=(), synthetic=False, cache=None,
+              manifest=None, manifest_cache=None):
+    """`cache` (.pkl) obejmuje ESC-50/FSC22/foldery; manifest ma własny cache memmap."""
     if cache and Path(cache).exists():
         with open(cache, "rb") as f:
-            return pickle.load(f)
-    clips = []
-    if esc50:
-        clips += load_esc50(esc50)
-    if fsc22:
-        clips += load_fsc22(fsc22)
-    for folder in folders:
-        clips += load_folder(folder)
-    if synthetic:
-        clips += make_synthetic()
+            clips = pickle.load(f)
+    else:
+        clips = []
+        if esc50:
+            clips += load_esc50(esc50)
+        if fsc22:
+            clips += load_fsc22(fsc22)
+        for folder in folders:
+            clips += load_folder(folder)
+        if synthetic:
+            clips += make_synthetic()
+        if cache and clips:
+            Path(cache).parent.mkdir(parents=True, exist_ok=True)
+            with open(cache, "wb") as f:
+                pickle.dump(clips, f, protocol=5)
+    if manifest:
+        clips += load_manifest(manifest, manifest_cache)
     if not clips:
-        raise SystemExit("Nie podano żadnego datasetu (--esc50 / --fsc22 / --folder / --synthetic)")
-    if cache:
-        Path(cache).parent.mkdir(parents=True, exist_ok=True)
-        with open(cache, "wb") as f:
-            pickle.dump(clips, f, protocol=5)
+        raise SystemExit("Nie podano żadnego datasetu "
+                         "(--esc50 / --fsc22 / --folder / --manifest / --synthetic)")
     return clips
 
 
-def split_by_group(clips, val=0.1, test=0.1):
-    """Deterministyczny podział po nagraniu źródłowym (bez przecieku między zbiorami)."""
-    parts = {"train": [], "val": [], "test": []}
+def split_by_group(clips, val=0.1, test=0.1, max_ratio=2.0):
+    """Deterministyczny podział po nagraniu źródłowym, osobno dla każdego źródła.
+
+    Cała grupa (nagranie) trafia do jednego zbioru, więc nie ma przecieku. Dla każdego
+    źródła najpierw dajemy do test i val po jednej grupie z piłą (jeśli są), potem
+    dopełniamy do docelowego ułamka. Grupy większe niż max_ratio * cel zostają w train,
+    żeby np. jedno długie nagranie z Kenii nie zabrało całej piły z treningu.
+    """
+    by_source = {}
     for c in clips:
-        u = zlib.crc32(c.group.encode()) / 2 ** 32
-        parts["test" if u < test else "val" if u < test + val else "train"].append(c)
+        by_source.setdefault(c.source, {}).setdefault(c.group, []).append(c)
+    parts = {"train": [], "val": [], "test": []}
+    targets = (("test", test), ("val", val))
+    for groups in by_source.values():
+        order = sorted(groups, key=lambda g: zlib.crc32(g.encode()))
+        npos = {g: sum(c.label for c in groups[g]) for g in order}
+        tot = {"pos": sum(npos.values()),
+               "neg": sum(len(groups[g]) for g in order if not npos[g])}
+        taken = {name: {"pos": 0, "neg": 0} for name, _ in targets}
+        dest = {}
+
+        def size(g):
+            return ("pos", npos[g]) if npos[g] else ("neg", len(groups[g]))
+
+        def fits(name, frac, g):
+            kind, n = size(g)
+            return taken[name][kind] + n <= max(max_ratio * frac * tot[kind], 1)
+
+        for name, frac in targets:            # 1) po jednej grupie z piłą do test i val
+            for g in order:
+                if npos[g] and g not in dest and fits(name, frac, g):
+                    dest[g] = name
+                    taken[name]["pos"] += npos[g]
+                    break
+        for g in order:                       # 2) dopełnienie do docelowego ułamka
+            if g in dest:
+                continue
+            kind, n = size(g)
+            dest[g] = "train"
+            for name, frac in targets:
+                if taken[name][kind] < frac * tot[kind] and fits(name, frac, g):
+                    dest[g] = name
+                    taken[name][kind] += n
+                    break
+        for g in order:
+            parts[dest[g]].extend(groups[g])
     return parts
 
 
@@ -185,23 +274,56 @@ def _rms(x):
     return float(np.sqrt(np.mean(x ** 2)) + 1e-9)
 
 
+class _SourcePool:
+    """Losowanie: najpierw źródło (waga n**alpha), potem klip z tego źródła.
+
+    alpha=1 to zwykłe losowanie po klipach (FrugalAI ok. 97% pił), alpha=0 to równo
+    po źródłach (108 klipów z Kenii dostałoby tyle samo co 17 tys. z FrugalAI
+    i model zapamiętałby jedno nagranie). Domyślne 0.3 jest pomiędzy.
+    """
+
+    def __init__(self, clips, alpha):
+        by = {}
+        for c in clips:
+            by.setdefault(c.source, []).append(c)
+        self.sources = sorted(by)
+        self.clips = [by[s] for s in self.sources]
+        w = np.array([len(c) ** alpha for c in self.clips], np.float64)
+        self.p = w / w.sum()
+
+    def __len__(self):
+        return sum(len(c) for c in self.clips)
+
+    def draw(self, rng):
+        group = self.clips[rng.choice(len(self.clips), p=self.p)]
+        return group[rng.integers(len(group))]
+
+    def describe(self):
+        return ", ".join(f"{s} {p:.0%}" for s, p in zip(self.sources, self.p))
+
+
 class MixSynth:
     """Generuje 1 s okna: tło + piła / inne zdarzenie / nic."""
 
     def __init__(self, clips, seed=0, p_pos=0.5, p_neg_event=0.5, p_quiet_bed=0.15,
-                 snr_db=(-5.0, 20.0), level_db=(-45.0, -10.0)):
+                 snr_db=(-10.0, 20.0), level_db=(-65.0, -10.0), p_band_limit=0.3,
+                 p_distance=0.6, distance_hz=(800.0, 7000.0), p_raw=0.2, source_alpha=0.3):
         self.rng = np.random.default_rng(seed)
-        self.pos = [c for c in clips if c.label == 1]
-        self.neg = [c for c in clips if c.label == 0]
-        if not self.pos or not self.neg:
+        self.pos = _SourcePool([c for c in clips if c.label == 1], source_alpha)
+        self.neg = _SourcePool([c for c in clips if c.label == 0], source_alpha)
+        if not len(self.pos) or not len(self.neg):
             raise ValueError(f"Potrzebne oba rodzaje klipów (piła: {len(self.pos)}, inne: {len(self.neg)})")
         self.p_pos, self.p_neg_event, self.p_quiet_bed = p_pos, p_neg_event, p_quiet_bed
         self.snr_db, self.level_db = snr_db, level_db
+        self.p_band_limit, self.p_distance, self.distance_hz = p_band_limit, p_distance, distance_hz
+        self.p_raw = p_raw
 
     def _crop(self, clip, n, energetic=False):
         x = clip.audio
         if len(x) < n:
-            x = np.resize(x, n)   # zapętlenie krótkiego klipu
+            # dopełnienie ciszą w losowym miejscu, bez zapętlania krótkich klipów
+            s = self.rng.integers(0, n - len(x) + 1)
+            x = np.pad(np.asarray(x), (s, n - len(x) - s))
         best, best_rms = None, -1.0
         for _ in range(6 if energetic else 1):   # unikaj wycinków z ciszą
             s = self.rng.integers(0, len(x) - n + 1)
@@ -213,43 +335,69 @@ class MixSynth:
 
     def _distance_lowpass(self, x):
         """Pochłanianie wysokich częstotliwości przez powietrze i las na dystansie."""
-        fc = self.rng.uniform(2000, 7000)
+        lo, hi = np.log(self.distance_hz)
+        fc = np.exp(self.rng.uniform(lo, hi))   # log-równomiernie: 800 Hz ... 7 kHz
         return signal.sosfilt(signal.butter(2, fc, "lp", fs=C.SAMPLE_RATE, output="sos"), x)
 
     def sample(self):
         rng, n = self.rng, C.WINDOW_SAMPLES
         label = int(rng.random() < self.p_pos)
 
+        if label and rng.random() < self.p_raw:
+            # nagranie piły bez dokładanego tła - nagrania terenowe (Kenia, Zenodo) mają
+            # już własne tło, a dokładanie kolejnego potrafi całkiem zakryć daleką piłę
+            fg_clip = self.pos.draw(rng)
+            mix = self._crop(fg_clip, n, energetic=True)
+            return self._finish(mix, None, label, {"bed": None, "fg": fg_clip.category,
+                                                   "src": fg_clip.source})
+
         if rng.random() < self.p_quiet_bed:
             # cichy las: lekko kolorowany szum
             w = signal.lfilter([1], [1, -rng.uniform(0, 0.95)], rng.standard_normal(2 * n))
             seg, bed_cat = (w / _rms(w) * 1e-3).astype(np.float32), "quiet"
         else:
-            bed_clip = self.neg[rng.integers(len(self.neg))]
+            bed_clip = self.neg.draw(rng)
             seg, bed_cat = self._crop(bed_clip, 2 * n), bed_clip.category
         ref, bed = seg[:n], seg[n:]           # ref = tło przed oknem
         mix, fg_cat = bed.copy(), None
+        src = "quiet" if bed_cat == "quiet" else bed_clip.source
 
         fg = None
         if label:
-            fg_clip = self.pos[rng.integers(len(self.pos))]
+            fg_clip = self.pos.draw(rng)
             fg = self._crop(fg_clip, n, energetic=True)
-            if rng.random() < 0.5:
+            if rng.random() < self.p_distance:
                 fg = self._distance_lowpass(fg)
         elif rng.random() < self.p_neg_event:
-            fg_clip = self.neg[rng.integers(len(self.neg))]
+            fg_clip = self.neg.draw(rng)
             fg = self._crop(fg_clip, n, energetic=True)
         if fg is not None:
             snr = rng.uniform(*self.snr_db)
             mix = mix + fg * (_rms(bed) * 10 ** (snr / 20) / _rms(fg))
             fg_cat = fg_clip.category
+            if label:
+                src = fg_clip.source
+        return self._finish(mix, ref, label, {"bed": bed_cat, "fg": fg_cat, "src": src})
+
+    def _finish(self, mix, ref, label, meta):
+        """Obcięcie pasma, losowa głośność, profil tła i cechy."""
+        rng = self.rng
+
+        if rng.random() < self.p_band_limit:
+            # część nagrań ma 8/12 kHz (pasmo do 4/6 kHz) - obcinamy pasmo całego miksu
+            # niezależnie od etykiety, żeby szerokość pasma nie zdradzała klasy
+            sos = signal.butter(4, rng.uniform(3500, 6000), "lp", fs=C.SAMPLE_RATE, output="sos")
+            mix = signal.sosfilt(sos, mix)
+            if ref is not None:
+                ref = signal.sosfilt(sos, ref)
 
         gain = 10 ** (rng.uniform(*self.level_db) / 20) / _rms(mix)
         mix = np.clip(mix * gain, -1, 1)
-        ref = np.clip(ref * gain, -1, 1)
-        profile = F.noise_profile(ref) if rng.random() < 0.9 else None
+        profile = None
+        if ref is not None and rng.random() < 0.9:
+            profile = F.noise_profile(np.clip(ref * gain, -1, 1))
         feats = F.extract_features(mix.astype(np.float32), profile)
-        return feats, label, {"bed": bed_cat, "fg": fg_cat}
+        return feats, label, meta
 
     def batch(self, size, with_meta=False):
         out = [self.sample() for _ in range(size)]

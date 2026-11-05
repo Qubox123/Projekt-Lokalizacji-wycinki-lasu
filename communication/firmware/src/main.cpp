@@ -5,6 +5,7 @@
 #include <RadioLib.h>
 #include <esp_timer.h>
 #include "protocol.h"
+#include "sync_math.h"
 
 #ifndef NODE_ID
 #error "Ustaw NODE_ID=0 (gateway), 1,2 lub 3 (sensor)"
@@ -76,8 +77,9 @@ void processFrame(const Frame& f, int64_t rxTime) {
     int64_t t3 = f.t3;    // czas gateway przy SYNC_REPLY
     int64_t t4 = rxTime;  // czas sensora przy odbiorze odpowiedzi
     if (t1 != pendingT1) return;
-    const int64_t theta = ((t2-t1) + (t3-t4))/2;
-    const int64_t rtt = (t4-t1) - (t3-t2);
+    const SyncEstimate measurement = estimateSync(t1, t2, t3, t4);
+    const int64_t theta = measurement.offset_us;
+    const int64_t rtt = measurement.rtt_us;
     if (rtt < 0 || rtt > 1000000) {
       Serial.printf("Rejected sample: estimated RTT=%lld us\n", (long long)rtt);
       return;

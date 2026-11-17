@@ -42,3 +42,16 @@ class PacketSummary(BaseModel):
     n_samples: int
     event_id: int | None
     received_at: datetime
+
+
+class EventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    start_us: int
+    end_us: int
+    status: str
+    created_at: datetime
+    lat: float | None
+    lon: float | None
+    accuracy_m: float | None
+    packets: list[PacketSummary]

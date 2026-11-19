@@ -6,6 +6,7 @@
 #include <esp_timer.h>
 #include "protocol.h"
 #include "sync_math.h"
+#include "clock_discipline.h"
 
 #ifndef NODE_ID
 #error "Ustaw NODE_ID=0 (gateway), 1,2 lub 3 (sensor)"
@@ -30,6 +31,7 @@ int64_t lastEventUs = 0;
 int64_t lastCorrectionUs = 0;
 int64_t offsetUs = 0; // czas centrali - czas węzła
 bool hasSync = false;
+ClockDiscipline clockModel;
 uint16_t nextSeq = 0;
 uint16_t pendingSeq = 0;
 int64_t pendingT1 = 0;
@@ -84,12 +86,20 @@ void processFrame(const Frame& f, int64_t rxTime) {
       Serial.printf("Rejected sample: estimated RTT=%lld us\n", (long long)rtt);
       return;
     }
-    offsetUs = theta;
+    if (!clockModel.add(t4, theta, rtt)) {
+      Serial.println("Rejected clock sample");
+      pendingT1 = 0;
+      return;
+    }
+    offsetUs = clockModel.offsetAt(t4);
     lastCorrectionUs = t4;
     hasSync = true;
     pendingT1 = 0;
-    Serial.printf("SYNC node=%d offset=%lld us rtt_est=%lld us (UNCALIBRATED)\n",
-                  NODE_ID, (long long)offsetUs, (long long)rtt);
+    Serial.printf("SYNC node=%d raw_offset=%lld us model_offset=%lld us "
+                  "offset_slope=%.2f ppm rtt_est=%lld us samples=%u (UNCALIBRATED)\n",
+                  NODE_ID, (long long)theta, (long long)offsetUs,
+                  clockModel.offsetSlopePpm(), (long long)rtt,
+                  (unsigned)clockModel.sampleCount());
   }
 #endif
 }
@@ -144,11 +154,11 @@ void loop() {
     if (status != RADIOLIB_ERR_NONE) Serial.printf("Sync TX error=%d\n", status);
     armReceive();
   }
-  if (hasSync && now-lastEventUs > 20000000LL) {
+  if (hasSync && clockModel.fresh(now) && now-lastEventUs > 20000000LL) {
     lastEventUs = now;
     Frame evt = makeFrame(TEST_EVENT, NODE_ID, 0, ++nextSeq);
     evt.t1 = now;                // sztuczne zdarzenie, jeszcze bez mikrofonu
-    evt.t2 = now + offsetUs;     // korekta offsetu, bez kompensacji dryftu
+    evt.t2 = clockModel.corrected(now); // korekta offsetu + oszacowany dryft
     evt.t3 = lastCorrectionUs;   // diagnostyka wieku synchronizacji
     sendFrame(evt, false);
   }

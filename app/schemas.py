@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from typing import Annotated
 
@@ -23,7 +22,6 @@ class PacketIn(BaseModel):
 class NodeIn(BaseModel):
     lat: Annotated[float, Field(ge=-90, le=90)]
     lon: Annotated[float, Field(ge=-180, le=180)]
-    alt_m: float | None = None
     active: bool = True
 
 
@@ -54,4 +52,5 @@ class EventOut(BaseModel):
     lat: float | None
     lon: float | None
     accuracy_m: float | None
+    tb_sent: bool
     packets: list[PacketSummary]

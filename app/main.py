@@ -14,34 +14,41 @@ from .database import Base, SessionLocal, engine, get_db
 from .group import assign_to_event, close_stale_events, update_status
 from .models import Event, Node, Packet
 from .schemas import EventOut, NodeIn, NodeOut, PacketIn, PacketSummary
+from .thingsboard import send_pending
 
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lokalizator")
 
 Base.metadata.create_all(bind=engine)
 
-def _cleanup_once() -> None:
+
+def _background_once() -> None:
+    """Jeden obieg pętli w tle: zamknij stare zdarzenia, wyślij wyniki do ThingsBoard."""
     with SessionLocal() as db:
-        if close_stale_events(db):
-            db.commit()
+        close_stale_events(db)
+        db.commit()
+        send_pending(db)
+        db.commit()
 
 
-async def _cleanup_loop() -> None:
+async def _background_loop() -> None:
     while True:
         await asyncio.sleep(config.CLEANUP_INTERVAL_S)
         try:
-            await asyncio.to_thread(_cleanup_once)
+            await asyncio.to_thread(_background_once)
         except Exception:
-            logger.exception("Błąd przy zamykaniu starych zdarzeń")
+            logger.exception("Błąd w pętli w tle")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    task = asyncio.create_task(_cleanup_loop())
+    if not config.TB_TOKEN:
+        logger.warning("Brak TB_TOKEN: wyniki nie będą wysyłane do ThingsBoard")
+    task = asyncio.create_task(_background_loop())
     yield
     task.cancel()
 
-app = FastAPI(title="Lokalizator wycinki: backend")
+app = FastAPI(title="Lokalizator wycinki: backend", lifespan=lifespan)
 
 DB = Annotated[Session, Depends(get_db)]
 
@@ -106,6 +113,9 @@ def receive_packet(packet: PacketIn, db: DB):
 @app.get("/packets", response_model=list[PacketSummary])
 def list_packets(db: DB, limit: Annotated[int, Query(ge=1, le=500)] = 20):
     return db.scalars(select(Packet).order_by(Packet.id.desc()).limit(limit)).all()
+
+
+# Zdarzenia
 
 @app.get("/events", response_model=list[EventOut])
 def list_events(db: DB, status: str | None = None, limit: Annotated[int, Query(ge=1, le=500)] = 20):

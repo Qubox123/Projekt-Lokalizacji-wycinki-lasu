@@ -1,11 +1,15 @@
 """Grupowanie pakietów w zdarzenia"""
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import config
+from .localization import localize_event
 from .models import Event, EventStatus, Node, Packet
+
+logger = logging.getLogger("lokalizator")
 
 
 def assign_to_event(db: Session, packet: Packet) -> Event:
@@ -45,11 +49,11 @@ def update_status(db: Session, event: Event) -> None:
     active_nodes = set(db.scalars(select(Node.node_id).where(Node.active)).all())
     have = event.node_ids
     if len(have) >= config.MIN_NODES and active_nodes <= have:
-        _mark_ready(event)
+        _mark_ready(db, event)
 
 
 def close_stale_events(db: Session) -> int:
-    """Zamyka zdarzenia, które czekają dłużej niż EVENT_TIMEOUT_S. Zwraca, ile zamknięto.    """
+    """Zamyka zdarzenia, które czekają dłużej niż EVENT_TIMEOUT_S. Zwraca, ile zamknięto."""
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=config.EVENT_TIMEOUT_S)
     stale = db.scalars(
         select(Event)
@@ -58,12 +62,17 @@ def close_stale_events(db: Session) -> int:
     ).all()
     for event in stale:
         if len(event.node_ids) >= config.MIN_NODES:
-            _mark_ready(event)
+            _mark_ready(db, event)
         else:
             event.status = EventStatus.INCOMPLETE
     return len(stale)
 
 
-def _mark_ready(event: Event) -> None:
+def _mark_ready(db: Session, event: Event) -> None:
+    """Zdarzenie jest gotowe"""
     event.status = EventStatus.READY
-    # TODO (algorytm lokalizacji)
+    try:
+        localize_event(db, event)
+    except Exception:
+        logger.exception("Błąd algorytmu lokalizacji dla zdarzenia %s", event.id)
+        event.status = EventStatus.FAILED

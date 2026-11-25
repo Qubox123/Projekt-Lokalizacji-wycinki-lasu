@@ -26,7 +26,6 @@ class Node(Base):
     node_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     lat: Mapped[float]                 # szerokość geograficzna
     lon: Mapped[float]                 # długość geograficzna
-    alt_m: Mapped[float | None]        # wysokość [m]
     active: Mapped[bool] = mapped_column(default=True)
 
 
@@ -42,6 +41,8 @@ class Event(Base):
     lat: Mapped[float | None]
     lon: Mapped[float | None]
     accuracy_m: Mapped[float | None]
+
+    tb_sent: Mapped[bool] = mapped_column(default=False, index=True)
 
     packets: Mapped[list["Packet"]] = relationship(back_populates="event")
 

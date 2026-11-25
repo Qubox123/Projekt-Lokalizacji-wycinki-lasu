@@ -1,0 +1,46 @@
+{
+ "esc50:inne": [
+  75,
+  198
+ ],
+ "esc50:pila": [
+  4,
+  4
+ ],
+ "folder:inne": [
+  0,
+  2
+ ],
+ "folder:pila": [
+  2,
+  2
+ ],
+ "frugalai:inne": [
+  97,
+  600
+ ],
+ "frugalai:pila": [
+  561,
+  600
+ ],
+ "fsc22:inne": [
+  57,
+  195
+ ],
+ "fsc22:pila": [
+  7,
+  8
+ ],
+ "kenya:inne": [
+  14,
+  74
+ ],
+ "kenya:pila": [
+  1,
+  20
+ ],
+ "zenodo:pila": [
+  103,
+  103
+ ]
+}

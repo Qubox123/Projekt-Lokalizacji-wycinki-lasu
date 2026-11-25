@@ -8,3 +8,4 @@ do serwera, który lokalizuje źródło.
 | [`chainsaw_detector/`](chainsaw_detector/README.md) | trening i eksport modelu wykrywającego piłę |
 | [`esp32/`](esp32/README.md) | kod węzła (Pycom LoPy 1.0), testy sprzętu, narzędzia |
 | [`docs/`](docs/) | [sprzęt](docs/hardware.md), [firmware](docs/flashing.md) |
+| [`app/`](app/) | kod serwera lokalizującego źródło dźwięku |

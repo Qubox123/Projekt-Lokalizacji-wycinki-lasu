@@ -88,14 +88,17 @@ def main():
     ap.add_argument("--fsc22", help="katalog FSC22")
     ap.add_argument("--folder", action="append", default=[], help="własne nagrania")
     ap.add_argument("--cache", help="plik .pkl z wczytanymi klipami")
+    ap.add_argument("--manifest", help="unified_dataset/manifest_eligible.csv")
+    ap.add_argument("--manifest-cache", default="out/manifest_cache")
     ap.add_argument("--model", default="out/chainsaw_int8.tflite")
     ap.add_argument("--keras", default="out/chainsaw.keras", help="model float (opcjonalnie)")
     ap.add_argument("--n-eval", type=int, default=3000, help="liczba okien w teście miksów")
     ap.add_argument("--out", help="katalog na wyniki (domyślnie out/eval_<dataset>)")
     args = ap.parse_args()
 
-    clips = D.load_all(args.esc50, args.fsc22, args.folder, cache=args.cache)
-    name = "_".join(k for k in ("esc50", "fsc22") if getattr(args, k)) or "folder"
+    clips = D.load_all(args.esc50, args.fsc22, args.folder, cache=args.cache,
+                       manifest=args.manifest, manifest_cache=args.manifest_cache)
+    name = "_".join(k for k in ("esc50", "fsc22", "manifest") if getattr(args, k)) or "folder"
     out = Path(args.out or Path(args.model).parent / f"eval_{name}")
     print(f"{len(clips)} klipów, piła: {sum(c.label for c in clips)}")
 

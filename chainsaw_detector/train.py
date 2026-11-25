@@ -111,6 +111,8 @@ def main():
     ap.add_argument("--width", type=int, default=16)
     ap.add_argument("--source-alpha", type=float, default=0.3,
                     help="waga źródła = liczba_klipów**alpha (0 = równo po źródłach, 1 = po klipach)")
+    ap.add_argument("--source-boost", action="append", default=[], metavar="ŹRÓDŁO=WAGA",
+                    help="mnożnik wagi losowania źródła, np. folder=3 dla nagrań z mikrofonu węzła")
     ap.add_argument("--out", default="out")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
@@ -129,7 +131,8 @@ def main():
     print("       (źródło piła/inne)")
 
     alpha = args.source_alpha
-    train_synth = D.MixSynth(parts["train"], seed=args.seed, source_alpha=alpha)
+    boost = {k: float(v) for k, v in (b.split("=") for b in args.source_boost)}
+    train_synth = D.MixSynth(parts["train"], seed=args.seed, source_alpha=alpha, source_boost=boost)
     print("losowanie piły:", train_synth.pos.describe())
     print("losowanie tła: ", train_synth.neg.describe())
     Xv, yv, mv = D.MixSynth(parts["val"], seed=1, source_alpha=alpha).batch(args.n_eval, with_meta=True)

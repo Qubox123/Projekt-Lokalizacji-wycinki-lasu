@@ -205,14 +205,15 @@ def load_all(esc50=None, fsc22=None, folders=(), synthetic=False, cache=None,
             clips += load_esc50(esc50)
         if fsc22:
             clips += load_fsc22(fsc22)
-        for folder in folders:
-            clips += load_folder(folder)
         if synthetic:
             clips += make_synthetic()
         if cache and clips:
             Path(cache).parent.mkdir(parents=True, exist_ok=True)
             with open(cache, "wb") as f:
                 pickle.dump(clips, f, protocol=5)
+    # własne nagrania wczytywane zawsze na nowo (są małe), żeby cache ich nie zamrażał
+    for folder in folders:
+        clips += load_folder(folder)
     if manifest:
         clips += load_manifest(manifest, manifest_cache)
     if not clips:
@@ -282,13 +283,15 @@ class _SourcePool:
     i model zapamiętałby jedno nagranie). Domyślne 0.3 jest pomiędzy.
     """
 
-    def __init__(self, clips, alpha):
+    def __init__(self, clips, alpha, boost=None):
         by = {}
         for c in clips:
             by.setdefault(c.source, []).append(c)
         self.sources = sorted(by)
         self.clips = [by[s] for s in self.sources]
-        w = np.array([len(c) ** alpha for c in self.clips], np.float64)
+        boost = boost or {}
+        w = np.array([len(c) ** alpha * boost.get(s, 1.0)
+                      for s, c in zip(self.sources, self.clips)], np.float64)
         self.p = w / w.sum()
 
     def __len__(self):
@@ -307,10 +310,10 @@ class MixSynth:
 
     def __init__(self, clips, seed=0, p_pos=0.5, p_neg_event=0.5, p_quiet_bed=0.15,
                  snr_db=(-10.0, 20.0), level_db=(-65.0, -10.0), p_band_limit=0.3,
-                 p_distance=0.6, distance_hz=(800.0, 7000.0), p_raw=0.2, source_alpha=0.3):
+                 p_distance=0.6, distance_hz=(800.0, 7000.0), p_raw=0.2, source_alpha=0.3, source_boost=None):
         self.rng = np.random.default_rng(seed)
-        self.pos = _SourcePool([c for c in clips if c.label == 1], source_alpha)
-        self.neg = _SourcePool([c for c in clips if c.label == 0], source_alpha)
+        self.pos = _SourcePool([c for c in clips if c.label == 1], source_alpha, source_boost)
+        self.neg = _SourcePool([c for c in clips if c.label == 0], source_alpha, source_boost)
         if not len(self.pos) or not len(self.neg):
             raise ValueError(f"Potrzebne oba rodzaje klipów (piła: {len(self.pos)}, inne: {len(self.neg)})")
         self.p_pos, self.p_neg_event, self.p_quiet_bed = p_pos, p_neg_event, p_quiet_bed

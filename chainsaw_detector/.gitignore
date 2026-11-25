@@ -5,3 +5,9 @@ __pycache__/
 *.pkl
 out/manifest_cache/
 unified_dataset/
+firmware/**/.pio/
+firmware/**/managed_components/
+firmware/**/sdkconfig.*
+firmware/**/dependencies.lock
+!firmware/**/sdkconfig.defaults
+firmware/bin/
